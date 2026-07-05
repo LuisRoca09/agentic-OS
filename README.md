@@ -6,22 +6,19 @@ Sistema compuesto por tres programas en C que simulan un "backdoor" en el
 API de ventanas X11: cada tecla presionada en una ventana gráfica se envía
 por socket TCP a un servidor remoto (`IALearner`), que arma oraciones,
 las clasifica con la técnica *bag of words* y, al finalizar todos los
-procesos, infiere el **contexto de usuario** (Personal administrativo,
-Personal técnico, Profesor o Estudiante).
+procesos, infiere el **contexto de usuario** que puede ser: Personal administrativo, Personal técnico, Profesor o Estudiante.
 
 ## Estructura del proyecto
 
 ```
 agentic-OS/
 ├── include/
-│   └── protocolo.h      # Constantes y protocolo compartido
+│   └── protocolo.h           # Constantes y protocolo compartido
 ├── src/
-│   ├── ia_learner.c     # Servidor multi-hilo (clasificador)
-│   ├── launcher.c       # Consola interactiva (crea/monitorea procesos)
-│   └── ventana_x11.c    # Cliente gráfico X11 (envía teclas por socket)
-├── ia_learner           # binario compilado
-├── launcher             # binario compilado
-├── ventana_x11           # binario compilado
+│   ├── ia_learner.c          # Servidor multi-hilo (clasificador)
+│   ├── launcher.c            # Consola interactiva (crea/monitorea procesos)
+│   └── ventana_x11.c         # Cliente gráfico X11 (envía teclas por socket)
+├── Agentic-OS_DISEÑO.pdf     # Diagrama de despliegue y documento de diseño
 └── README.md
 ```
 
