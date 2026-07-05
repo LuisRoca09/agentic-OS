@@ -1,7 +1,6 @@
 # Agentic-OS
 
-**Autor:** _(completa aquí tu nombre — el enunciado pide que el ZIP de
-entrega lleve tu nombre)_
+**Autor:** _LUIS ERNESTO ROCA MACIAS_
 
 Sistema compuesto por tres programas en C que simulan un "backdoor" en el
 API de ventanas X11: cada tecla presionada en una ventana gráfica se envía
