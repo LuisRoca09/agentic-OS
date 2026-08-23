@@ -9,7 +9,7 @@
 #include <arpa/inet.h>
 #include "../include/protocolo.h"
 
-int conectar_ialearner(int id_ventana) {
+int conectar_ialearner(int id_ventana, const char *host, int puerto) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         perror("Error al crear el socket");
@@ -18,9 +18,9 @@ int conectar_ialearner(int id_ventana) {
 
     struct sockaddr_in serv_addr;
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(PUERTO_DEFECTO);
+    serv_addr.sin_port = htons(puerto);
     
-    if (inet_pton(AF_INET, HOST_DEFECTO, &serv_addr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, host, &serv_addr.sin_addr) <= 0) {
         perror("Dirección IP inválida");
         close(sock);
         return -1;
@@ -32,7 +32,7 @@ int conectar_ialearner(int id_ventana) {
         return -1;
     }
 
-    // Enviar el ID de la ventana al conectarnos según el protocolo
+    // Enviar el ID real de la ventana al servidor
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%s %d\n", PROTO_ID, id_ventana);
     write(sock, buffer, strlen(buffer));
@@ -41,12 +41,14 @@ int conectar_ialearner(int id_ventana) {
 }
 
 int main(int argc, char *argv[]) {
-    // Tomar el ID de la ventana desde los argumentos (pasado por el launcher) o por defecto 1
+    // El launcher pasa: ./ventana_x11 <id> <host> <puerto>
     int id_ventana = (argc > 1) ? atoi(argv[1]) : 1;
+    const char *host = (argc > 2) ? argv[2] : HOST_DEFECTO;
+    int puerto = (argc > 3) ? atoi(argv[3]) : PUERTO_DEFECTO;
 
-    int sock = conectar_ialearner(id_ventana);
+    int sock = conectar_ialearner(id_ventana, host, puerto);
     if (sock < 0) {
-        fprintf(stderr, "Aviso: Ejecutando ventana sin conexión al IALearner.\n");
+        fprintf(stderr, "Aviso: Ventana %d sin conexión al IALearner.\n", id_ventana);
     }
 
     Display *display = XOpenDisplay(NULL);
@@ -116,7 +118,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Al cerrar la ventana, avisar al IALearner con FIN
     if (sock >= 0) {
         char buffer[64];
         snprintf(buffer, sizeof(buffer), "%s\n", PROTO_FIN);

@@ -26,7 +26,7 @@ int main(int argc, char *argv[]) {
 
     printf("[Launcher] Agentic-OS - %d ventana(s) | IALearner en %s:%d\n", n_ventanas, host, puerto);
 
-    // Notificar al IALearner cuántas ventanas se esperan
+    // Notificar al IALearner cuántas ventanas se esperan inicialmente
     int sock_notif = socket(AF_INET, SOCK_STREAM, 0);
     if (sock_notif >= 0) {
         struct sockaddr_in serv_addr;
@@ -44,15 +44,15 @@ int main(int argc, char *argv[]) {
     }
 
     ProcesoHijo procesos[MAX_VENTANAS];
+    int total_lanzadas = 0;
 
-    // Lanzar N procesos gráficos
+    // Lanzar N procesos gráficos iniciales
     for (int i = 0; i < n_ventanas; i++) {
         pid_t pid = fork();
         if (pid < 0) {
             perror("Error al crear proceso con fork");
             exit(1);
         } else if (pid == 0) {
-            // Proceso Hijo: Convertir ID, host y puerto a strings para el exec
             char id_str[16], puerto_str[16];
             snprintf(id_str, sizeof(id_str), "%d", i + 1);
             snprintf(puerto_str, sizeof(puerto_str), "%d", puerto);
@@ -65,10 +65,10 @@ int main(int argc, char *argv[]) {
             procesos[i].id_ventana = i + 1;
             procesos[i].estado = PROC_ACTIVO;
             printf("[Launcher] Ventana %d lanzada (PID %d)\n", i + 1, pid);
+            total_lanzadas++;
         }
     }
 
-    // Menú interactivo del launcher
     int opcion = 0;
     while (1) {
         printf("\n==================================\n");
@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
             printf(" ID      PID      Estado       Cod.Sal.  \n");
             printf("--------------------------------------------------\n");
             int activos = 0, terminados = 0;
-            for (int i = 0; i < n_ventanas; i++) {
+            for (int i = 0; i < total_lanzadas; i++) {
                 int status;
                 pid_t res = waitpid(procesos[i].pid, &status, WNOHANG);
                 if (res > 0) {
@@ -108,23 +108,45 @@ int main(int argc, char *argv[]) {
                 }
             }
             printf("--------------------------------------------------\n");
-            printf(" Activos: %d | Terminados: %d | Total: %d\n", activos, terminados, n_ventanas);
+            printf(" Activos: %d | Terminados: %d | Total: %d\n", activos, terminados, total_lanzadas);
 
         } else if (opcion == 2 || opcion == 4) {
             printf("[Launcher] Cerrando todas las ventanas activas...\n");
-            for (int i = 0; i < n_ventanas; i++) {
+            for (int i = 0; i < total_lanzadas; i++) {
                 if (procesos[i].estado == PROC_ACTIVO) {
                     kill(procesos[i].pid, SIGTERM);
                 }
             }
-            // Esperar a que todos los hijos terminen
-            for (int i = 0; i < n_ventanas; i++) {
+            for (int i = 0; i < total_lanzadas; i++) {
                 waitpid(procesos[i].pid, NULL, 0);
             }
             printf("[Launcher] Ventanas cerradas. Fin.\n");
             break;
+
         } else if (opcion == 3) {
-            printf("Funcionalidad de expansión rápida no requerida para la prueba básica.\n");
+            int extra = 0;
+            printf("¿Cuántas ventanas nuevas deseas abrir? (max %d): ", MAX_VENTANAS - total_lanzadas);
+            if (scanf("%d", &extra) == 1 && extra > 0 && (total_lanzadas + extra) <= MAX_VENTANAS) {
+                for (int i = 0; i < extra; i++) {
+                    int nuevo_id = total_lanzadas + 1;
+                    pid_t pid = fork();
+                    if (pid == 0) {
+                        char id_str[16], puerto_str[16];
+                        snprintf(id_str, sizeof(id_str), "%d", nuevo_id);
+                        snprintf(puerto_str, sizeof(puerto_str), "%d", puerto);
+                        execl("./ventana_x11", "ventana_x11", id_str, host, puerto_str, NULL);
+                        exit(1);
+                    } else if (pid > 0) {
+                        procesos[total_lanzadas].pid = pid;
+                        procesos[total_lanzadas].id_ventana = nuevo_id;
+                        procesos[total_lanzadas].estado = PROC_ACTIVO;
+                        printf("[Launcher] Ventana adicional %d lanzada (PID %d)\n", nuevo_id, pid);
+                        total_lanzadas++;
+                    }
+                }
+            } else {
+                printf("Número inválido o excede el límite máximo de ventanas.\n");
+            }
         } else {
             printf("Opcion invalida.\n");
         }

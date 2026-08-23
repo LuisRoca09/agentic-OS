@@ -9,9 +9,7 @@
 #include <arpa/inet.h>
 #include "../include/protocolo.h"
 
-/* ══════════════════════════════════════════════
- * Diccionarios para Bag of Words
- * ══════════════════════════════════════════════ */
+/* Diccionarios para Bag of Words */
 const char *dic_correo[] = {
     "thank", "please", "regards", "meeting", "attached", 
     "information", "update", "schedule", "team", "project", NULL
@@ -27,99 +25,42 @@ const char *dic_reporte[] = {
     "server", "user", "performance", "service", "infrastructure", NULL
 };
 
-/* ══════════════════════════════════════════════
- * Estructuras de datos para el contexto
- * ══════════════════════════════════════════════ */
+/* Estructura de documentos y oraciones */
 typedef struct {
     int id_ventana;
     char buffer_oracion[TAM_MAX_ORACION];
     int pos_buffer;
-    int conteo_clases[NUM_CLASES]; // Frecuencias totales por clase
-    int palabras_unicas[NUM_CLASES]; // Palabras distintas encontradas
+    int conteo_clases[NUM_CLASES];
     ClaseDocumento clase_asignada;
     int activa;
 } DocumentoVentana;
 
+typedef struct {
+    int id_ventana;
+    char texto[TAM_MAX_ORACION];
+} OracionPendiente;
+
 DocumentoVentana docs[MAX_VENTANAS];
-pthread_mutex_t mutex_docs = PTHREAD_MUTEX_INITIALIZER;
+OracionPendiente cola_oraciones[TAM_COLA_ORACIONES];
+int fin_cola = 0;
+int total_oraciones_pendientes = 0;
+int parametro_P = P_DEFECTO;
+
 int total_ventanas_esperadas = 0;
 int ventanas_finalizadas = 0;
 
-/* Convierte un string a minúsculas */
+/* Sincronización */
+pthread_mutex_t mutex_sistema = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t cond_loader = PTHREAD_COND_INITIALIZER;
+
 void a_minusculas(char *str) {
     for (int i = 0; str[i]; i++) {
         str[i] = tolower((unsigned char)str[i]);
     }
 }
 
-/* Procesa una oración mediante Bag of Words */
-void procesar_oracion(DocumentoVentana *doc) {
-    if (strlen(doc->buffer_oracion) == 0) return;
-
-    char copia[TAM_MAX_ORACION];
-    strncpy(copia, doc->buffer_oracion, sizeof(copia));
-    copia[sizeof(copia) - 1] = '\0';
-    
-    char *token = strtok(copia, " \t\r\n.,;:!?");
-    while (token != NULL) {
-        char palabra[TAM_MAX_PALABRA];
-        strncpy(palabra, token, sizeof(palabra));
-        palabra[sizeof(palabra) - 1] = '\0';
-        a_minusculas(palabra);
-
-        // Comparar con Diccionario Correo
-        for (int i = 0; dic_correo[i] != NULL; i++) {
-            if (strcmp(palabra, dic_correo[i]) == 0) {
-                doc->conteo_clases[CLASE_CORREO]++;
-                break;
-            }
-        }
-        // Comparar con Diccionario Artículo
-        for (int i = 0; dic_articulo[i] != NULL; i++) {
-            if (strcmp(palabra, dic_articulo[i]) == 0) {
-                doc->conteo_clases[CLASE_ARTICULO]++;
-                break;
-            }
-        }
-        // Comparar con Diccionario Reporte
-        for (int i = 0; dic_reporte[i] != NULL; i++) {
-            if (strcmp(palabra, dic_reporte[i]) == 0) {
-                doc->conteo_clases[CLASE_REPORTE]++;
-                break;
-            }
-        }
-
-        token = strtok(NULL, " \t\r\n.,;:!?");
-    }
-
-    // Limpiar el buffer de la oración
-    memset(doc->buffer_oracion, 0, sizeof(doc->buffer_oracion));
-    doc->pos_buffer = 0;
-}
-
-/* Clasifica el documento de una ventana terminada */
-void clasificar_documento(DocumentoVentana *doc) {
-    int max_frecuencia = 0;
-    ClaseDocumento elegida = CLASE_DESCONOCIDA;
-
-    for (int c = 0; c < NUM_CLASES; c++) {
-        if (doc->conteo_clases[c] >= MIN_COINCIDENCIAS) {
-            if (doc->conteo_clases[c] > max_frecuencia) {
-                max_frecuencia = doc->conteo_clases[c];
-                elegida = (ClaseDocumento)c;
-            }
-        }
-    }
-
-    doc->clase_asignada = elegida;
-    const char *nombres_clases[] = {"Correo electrónico", "Artículo científico", "Reporte", "Desconocido"};
-    printf("\n[IALearner] -> Ventana %d clasificada como: [%s] (Frecuencias: Correo=%d, Articulo=%d, Reporte=%d)\n",
-           doc->id_ventana, nombres_clases[elegida], 
-           doc->conteo_clases[CLASE_CORREO], doc->conteo_clases[CLASE_ARTICULO], doc->conteo_clases[CLASE_REPORTE]);
-}
-
-/* Determina el tipo de usuario final en base a todos los documentos */
-void inferir_tipo_usuario() {
+/* Evalúa y clasifica el tipo de usuario de manera asincrónica */
+void evaluar_tipo_usuario() {
     int docs_por_clase[NUM_CLASES] = {0};
     int total_docs = 0;
 
@@ -130,23 +71,19 @@ void inferir_tipo_usuario() {
         }
     }
 
-    printf("\n════════════════════════════════════════════════════════════\n");
-    printf("           RESULTADO DE INFERENCIA DEL CONTEXTO            \n");
-    printf("════════════════════════════════════════════════════════════\n");
-    
     int tiene_correo = (docs_por_clase[CLASE_CORREO] > 0);
     int tiene_articulo = (docs_por_clase[CLASE_ARTICULO] > 0);
     int tiene_reporte = (docs_por_clase[CLASE_REPORTE] > 0);
 
     TipoUsuario perfil = USUARIO_INDETERMINADO;
 
-    if (tiene_correo && !tiene_articulo && !tiene_reporte) {
-        perfil = USUARIO_ADMINISTRATIVO;
-    } else if (tiene_correo && tiene_reporte && !tiene_articulo) {
+    if (tiene_correo && !tiene_articulo && tiene_reporte) {
+        perfil = USUARIO_ADMINISTRATIVO; // Según tabla de decisión ajustada
+    } else if (tiene_correo && !tiene_articulo && !tiene_reporte) {
         perfil = USUARIO_TECNICO;
     } else if (tiene_correo && tiene_articulo && !tiene_reporte) {
         perfil = USUARIO_PROFESOR;
-    } else if (tiene_articulo && tiene_reporte && !tiene_correo) {
+    } else if (!tiene_correo && tiene_articulo && tiene_reporte) {
         perfil = USUARIO_ESTUDIANTE;
     }
 
@@ -155,15 +92,110 @@ void inferir_tipo_usuario() {
         "Profesor", "Estudiante", "Indeterminado"
     };
 
-    printf("Total Documentos Analizados: %d\n", total_docs);
-    printf(" - Correos: %d\n", docs_por_clase[CLASE_CORREO]);
-    printf(" - Artículos: %d\n", docs_por_clase[CLASE_ARTICULO]);
-    printf(" - Reportes: %d\n", docs_por_clase[CLASE_REPORTE]);
-    printf("\n>> CONTEXTO INFERIDO: [%s] <<\n", nombres_usuarios[perfil]);
-    printf("════════════════════════════════════════════════════════════\n\n");
+    printf("\n================================================\n");
+    printf("  CONTEXTO DE USUARIO ACTUALIZADO: [%s]\n", nombres_usuarios[perfil]);
+    printf("================================================\n");
 }
 
-/* Manejador de cada conexión cliente (Hilo pthread) */
+/* Función ejecutada en paralelo por cada hilo del lote P */
+void *analizar_oracion_paralelo(void *arg) {
+    OracionPendiente *op = (OracionPendiente *)arg;
+    
+    int conteo_local[NUM_CLASES] = {0};
+    char copia[TAM_MAX_ORACION];
+    strncpy(copia, op->texto, sizeof(copia));
+    copia[sizeof(copia) - 1] = '\0';
+
+    char *token = strtok(copia, " \t\r\n.,;:!?");
+    while (token != NULL) {
+        char palabra[TAM_MAX_PALABRA];
+        strncpy(palabra, token, sizeof(palabra));
+        palabra[sizeof(palabra) - 1] = '\0';
+        a_minusculas(palabra);
+
+        for (int i = 0; dic_correo[i] != NULL; i++) {
+            if (strcmp(palabra, dic_correo[i]) == 0) { conteo_local[CLASE_CORREO]++; break; }
+        }
+        for (int i = 0; dic_articulo[i] != NULL; i++) {
+            if (strcmp(palabra, dic_articulo[i]) == 0) { conteo_local[CLASE_ARTICULO]++; break; }
+        }
+        for (int i = 0; dic_reporte[i] != NULL; i++) {
+            if (strcmp(palabra, dic_reporte[i]) == 0) { conteo_local[CLASE_REPORTE]++; break; }
+        }
+        token = strtok(NULL, " \t\r\n.,;:!?");
+    }
+
+    pthread_mutex_lock(&mutex_sistema);
+    DocumentoVentana *doc = &docs[op->id_ventana % MAX_VENTANAS];
+    for (int c = 0; c < NUM_CLASES; c++) {
+        doc->conteo_clases[c] += conteo_local[c];
+    }
+
+    // Determinar clase del documento si cumple el mínimo de 3
+    int max_freq = 0;
+    ClaseDocumento elegida = doc->clase_asignada;
+    for (int c = 0; c < NUM_CLASES; c++) {
+        if (doc->conteo_clases[c] >= MIN_COINCIDENCIAS && doc->conteo_clases[c] > max_freq) {
+            max_freq = doc->conteo_clases[c];
+            elegida = (ClaseDocumento)c;
+        }
+    }
+    doc->clase_asignada = elegida;
+
+    printf("[IALearner Paralelo] Oración de Ventana %d analizada. Clase actual del doc: %d\n", op->id_ventana, elegida);
+    evaluar_tipo_usuario();
+    
+    pthread_mutex_unlock(&mutex_sistema);
+    free(op);
+    return NULL;
+}
+
+/* Hilo Loader: Controla el límite P y lanza los hilos de análisis en paralelo */
+void *hilo_loader(void *arg) {
+    (void)arg;
+    while (1) {
+        pthread_mutex_lock(&mutex_sistema);
+        while (total_oraciones_pendientes < parametro_P) {
+            pthread_cond_wait(&cond_loader, &mutex_sistema);
+        }
+
+        printf("\n[Loader] Límite P=%d alcanzado. Despertando hilos de análisis en paralelo...\n", parametro_P);
+
+        // Extraer lote de P oraciones
+        OracionPendiente *lote = malloc(sizeof(OracionPendiente) * parametro_P);
+        for (int i = 0; i < parametro_P; i++) {
+            lote[i] = cola_oraciones[i];
+        }
+        // Desplazar cola
+        int restantes = total_oraciones_pendientes - parametro_P;
+        for (int i = 0; i < restantes; i++) {
+            cola_oraciones[i] = cola_oraciones[i + parametro_P];
+        }
+        total_oraciones_pendientes = restantes;
+        fin_cola = total_oraciones_pendientes;
+
+        pthread_mutex_unlock(&mutex_sistema);
+
+        // Crear P hilos para ejecutar el análisis en paralelo simultáneamente
+        pthread_t hilos_P[P_DEFECTO];
+        for (int i = 0; i < parametro_P; i++) {
+            OracionPendiente *op = malloc(sizeof(OracionPendiente));
+            *op = lote[i];
+            pthread_create(&hilos_P[i], NULL, analizar_oracion_paralelo, op);
+        }
+
+        // Esperar a que terminen los P hilos del lote
+        for (int i = 0; i < parametro_P; i++) {
+            pthread_join(hilos_P[i], NULL);
+        }
+
+        free(lote);
+        printf("[Loader] Lote de P oraciones procesado en paralelo con éxito.\n");
+    }
+    return NULL;
+}
+
+/* Manejador de cada conexión cliente */
 void *atender_cliente(void *arg) {
     int client_sock = *(int *)arg;
     free(arg);
@@ -179,17 +211,15 @@ void *atender_cliente(void *arg) {
     }
 
     while (fgets(buffer, sizeof(buffer), socket_stream) != NULL) {
-        buffer[strcspn(buffer, "\r\n")] = 0; // Quitar salto de línea
-
+        buffer[strcspn(buffer, "\r\n")] = 0;
         char comando[32];
         sscanf(buffer, "%s", comando);
 
         if (strcmp(comando, PROTO_TOTAL) == 0) {
             sscanf(buffer, "%*s %d", &total_ventanas_esperadas);
-            printf("[IALearner] Total de ventanas esperadas registrado: %d\n", total_ventanas_esperadas);
         } else if (strcmp(comando, PROTO_ID) == 0) {
             sscanf(buffer, "%*s %d", &id_ventana);
-            pthread_mutex_lock(&mutex_docs);
+            pthread_mutex_lock(&mutex_sistema);
             mi_doc = &docs[id_ventana % MAX_VENTANAS];
             mi_doc->id_ventana = id_ventana;
             mi_doc->activa = 1;
@@ -197,49 +227,56 @@ void *atender_cliente(void *arg) {
             mi_doc->clase_asignada = CLASE_DESCONOCIDA;
             memset(mi_doc->conteo_clases, 0, sizeof(mi_doc->conteo_clases));
             memset(mi_doc->buffer_oracion, 0, sizeof(mi_doc->buffer_oracion));
-            pthread_mutex_unlock(&mutex_docs);
-            printf("[IALearner] Conectada Ventana ID: %d\n", id_ventana);
+            pthread_mutex_unlock(&mutex_sistema);
         } else if (strcmp(comando, PROTO_CHAR) == 0) {
-            char c = buffer[5]; // El carácter tras "CHAR "
+            char c = buffer[5];
             if (mi_doc && mi_doc->pos_buffer < TAM_MAX_ORACION - 1) {
                 mi_doc->buffer_oracion[mi_doc->pos_buffer++] = c;
                 mi_doc->buffer_oracion[mi_doc->pos_buffer] = '\0';
             }
         } else if (strcmp(comando, PROTO_RET) == 0) {
-            if (mi_doc) {
-                pthread_mutex_lock(&mutex_docs);
-                procesar_oracion(mi_doc);
-                pthread_mutex_unlock(&mutex_docs);
+            if (mi_doc && strlen(mi_doc->buffer_oracion) > 0) {
+                pthread_mutex_lock(&mutex_sistema);
+                if (total_oraciones_pendientes < TAM_COLA_ORACIONES) {
+                    cola_oraciones[fin_cola].id_ventana = mi_doc->id_ventana;
+                    strncpy(cola_oraciones[fin_cola].texto, mi_doc->buffer_oracion, TAM_MAX_ORACION);
+                    fin_cola++;
+                    total_oraciones_pendientes++;
+                    
+                    printf("[IALearner] Oración acumulada de Ventana %d. Pendientes: %d/%d\n", 
+                           mi_doc->id_ventana, total_oraciones_pendientes, parametro_P);
+
+                    // Si se alcanza el parámetro P, se avisa al hilo Loader
+                    if (total_oraciones_pendientes >= parametro_P) {
+                        pthread_cond_signal(&cond_loader);
+                    }
+                }
+                memset(mi_doc->buffer_oracion, 0, sizeof(mi_doc->buffer_oracion));
+                mi_doc->pos_buffer = 0;
+                pthread_mutex_unlock(&mutex_sistema);
             }
         } else if (strcmp(comando, PROTO_FIN) == 0) {
             break;
         }
     }
 
-    // Al desconectarse la ventana
-    pthread_mutex_lock(&mutex_docs);
-    if (mi_doc) {
-        procesar_oracion(mi_doc); // procesar lo que haya quedado pendiente
-        clasificar_documento(mi_doc);
-        mi_doc->activa = 0;
-    }
+    pthread_mutex_lock(&mutex_sistema);
+    if (mi_doc) mi_doc->activa = 0;
     ventanas_finalizadas++;
-    if (total_ventanas_esperadas > 0 && ventanas_finalizadas >= total_ventanas_esperadas) {
-        inferir_tipo_usuario();
-    }
-    pthread_mutex_unlock(&mutex_docs);
+    pthread_mutex_unlock(&mutex_sistema);
 
     fclose(socket_stream);
+    close(client_sock);
     return NULL;
 }
 
-int main(void) {
-    int server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) {
-        perror("Error creando el socket del servidor");
-        return 1;
+int main(int argc, char *argv[]) {
+    if (argc > 1) {
+        parametro_P = atoi(argv[1]);
+        if (parametro_P <= 0) parametro_P = P_DEFECTO;
     }
 
+    int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
@@ -248,22 +285,17 @@ int main(void) {
     serv_addr.sin_addr.s_addr = INADDR_ANY;
     serv_addr.sin_port = htons(PUERTO_DEFECTO);
 
-    if (bind(server_sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Error en bind del servidor");
-        close(server_sock);
-        return 1;
-    }
-
-    if (listen(server_sock, MAX_VENTANAS) < 0) {
-        perror("Error en listen");
-        close(server_sock);
-        return 1;
-    }
+    bind(server_sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
+    listen(server_sock, MAX_VENTANAS);
 
     printf("=====================================================\n");
-    printf("      [IALearner Data Center] Servidor Iniciado      \n");
-    printf("      Escuchando en el puerto: %d                    \n", PUERTO_DEFECTO);
+    printf("   [IALearner V2] Servidor Activo (Parámetro P = %d)   \n", parametro_P);
     printf("=====================================================\n");
+
+    // Iniciar el hilo Loader independiente
+    pthread_t tid_loader;
+    pthread_create(&tid_loader, NULL, hilo_loader, NULL);
+    pthread_detach(tid_loader);
 
     while (1) {
         struct sockaddr_in cli_addr;
@@ -271,18 +303,9 @@ int main(void) {
         int *client_sock = malloc(sizeof(int));
         *client_sock = accept(server_sock, (struct sockaddr *)&cli_addr, &cli_len);
 
-        if (*client_sock < 0) {
-            free(client_sock);
-            continue;
-        }
-
         pthread_t tid;
-        if (pthread_create(&tid, NULL, atender_cliente, client_sock) != 0) {
-            perror("Error al crear hilo para cliente");
-            free(client_sock);
-        } else {
-            pthread_detach(tid); // Liberación automática de recursos del hilo
-        }
+        pthread_create(&tid, NULL, atender_cliente, client_sock);
+        pthread_detach(tid);
     }
 
     close(server_sock);
